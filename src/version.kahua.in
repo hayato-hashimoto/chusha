@@ -1,0 +1,8 @@
+;;-*- coding: utf-8; mode: kahua -*-
+;; chusha version
+;;
+;;  See COPYING for terms and conditions of using this software
+;;
+
+;;---------------------------------------------------------
+(define *chusha-version* "##PROJECT_VERSION##")

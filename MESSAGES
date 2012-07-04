@@ -1,0 +1,8 @@
+================================================================================
+
+Please edit app-servers in the Kahua working directory to add
+ "chusha" entry.
+
+  (chusha :arguments () :run-by-default 1)
+
+================================================================================

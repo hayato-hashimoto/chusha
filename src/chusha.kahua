@@ -1,0 +1,277 @@
+;; -*- coding: utf-8; mode: kahua -*-
+;;
+;;  Copyright (c) 2005 Kahua.Org, All rights reserved.
+;;  See COPYING for terms and conditions of using this software
+;;
+
+(load "chusha/version.kahua")
+
+(use gauche.collection)
+(use srfi-19)
+
+(define page-template
+  (kahua:make-xml-template
+   (kahua-template-path "chusha/page.xml")))
+
+(define-class <car-base> (<kahua-persistent-base>)
+  ( (pre-registration-date :allocation :persistent :init-value #f :init-keyword :pre-registration-date)
+    (registration-date :allocation :persistent :init-value #f :init-keyword :registration-date)
+    (expiry-date :allocation :persistent :init-value #f :init-keyword :expiry-date)
+    (expiry-date-to-register :allocation :persistent :init-value #f :init-keyword :expiry-date-to-register)
+    (registration-history :init-value '() :allocation :persistent)
+    (owner-room :init-keyword :owner-room :allocation :persistent)
+    (owner-name :init-keyword :owner-name :allocation :persistent)
+    (owner-tel :init-keyword :owner-tel :allocation :persistent :init-value "")
+    (owner-email :init-keyword :owner-email :allocation :persistent :init-value "")
+    (car-number-prefix :init-keyword :car-number-prefix :allocation :persistent)
+    (car-number :init-keyword :car-number :allocation :persistent)))
+
+(define-class <car> (<car-base>)   (type :init-value "car" :allocation :class))
+(define-class <motor> (<car-base>) (type :init-value "motor" :allocation :class))
+
+(define (publish title body)
+  (kahua:xml-template->sxml
+    page-template
+    :stylesheet (link/ (@/ (rel "stylesheet") (href (string-append (kahua-bridge-name) "/../../" (kahua-static-document-url "chusha/chusha.css")))))
+    :title (title/ title) :body (div: body)))
+
+(define-class <config> (<kahua-persistent-base>)
+  ((expiry-date :allocation :persistent :init-value #f)
+   (message :allocation :persistent :init-value "")))
+
+(define (config key . set)
+  (when (null? (map values (make-kahua-collection <config>)))
+    (make <config>))
+  (let ((conf (car (map values (make-kahua-collection <config>)))))
+    (if (null? set)
+      (~ conf key)
+      (set! (~ conf key) (car set)))))
+
+(define-entry (set-expiry-date)
+  (publish "有効期限の設定"
+    (div:
+      (p: "登録の有効期限を設定します。予備登録の新規受付分から反映されます。")
+      (form/cont: (@@: (cont (entry-lambda (:keyword date)
+        (config 'expiry-date (time->seconds (date->time-utc (string->date date "~Y-~m-~d"))))
+        (redirect/cont (cont default)))))
+        (p: "入力例: 2012-03-31")
+        (input: (@: (name "date")))
+        (input: (@: (type "submit") (value "保存")))))))
+
+(define-entry (set-message)
+  (publish "メッセージの設定"
+    (div:
+      (p: "予備登録完了時のメッセージを設定します。")
+      (form/cont: (@@: (cont (entry-lambda (:keyword message)
+        (config 'message message)
+        (redirect/cont (cont default)))))
+        (textarea: (@: (name "message")) (config 'message))
+        (input: (@: (type "submit") (value "保存")))))))
+
+(define (time->date-string time)
+  (and time
+    (sys-strftime "%Y-%m-%d" (sys-localtime time))))
+
+(define (update-registration x)
+  (entry-lambda ()
+    (publish "連絡先確認" 
+      (div:
+        (p: "連絡先は変更はありませんか?")
+        (dl:
+        (dt: "電話")
+        (dd: (~ x 'owner-tel))
+        (dd: (form/cont: (@@: (cont (entry-lambda (:keyword tel)
+                                      (set! (~ x 'owner-tel) tel)
+                                      (redirect/cont (cont (update-registration x))))))
+               (input: (@: (size 20) (name "tel")))
+               (input: (@: (type "submit") (value "訂正")))))
+        (dt: "メール")
+        (dd: (~ x 'owner-email))
+        (dd: (form/cont: (@@: (cont (entry-lambda (:keyword email)
+                                      (set! (~ x 'owner-email) email)
+                                      (redirect/cont (cont (update-registration x))))))
+               (input: (@: (size 40) (name "email")))
+               (input: (@: (type "submit") (value "訂正")))))
+        (p: (a/cont: (@@: (cont (entry-lambda ()
+            (set! (ref x 'pre-registration-date) (sys-time))
+            (set! (ref x 'expiry-date-to-register) (config 'expiry-date))
+            (publish "予備登録完了"
+              (div: (p: "予備登録は完了しました。")
+                    (p: (config 'message))
+                    (p: (a/cont: (@@: (cont list (instance->id x))) "一覧に戻る")))))))
+          "進む")))))))
+
+(define (x->symbol it)
+  (if (symbol? it) it (string->symbol it)))
+
+(define (id->name it)
+  (case (x->symbol it)
+    ((motor) "バイク")
+    ((car)   "自動車")))
+
+(define (id->class it)
+  (case (x->symbol it)
+    ((motor) <motor>)
+    ((car)   <car>)))
+
+(define (instance->id it)
+  (cond
+    ((is-a? it <motor>) 'motor)
+    ((is-a? it <car>)   'car)))
+
+(define (login)
+  (call/pc (lambda (k)
+    (let loop ()
+      (publish
+        "ログイン"
+        (div: 
+         (h1: "ログインしてください")
+         (form/cont:
+          (@@:
+            (cont 
+              (entry-lambda (:keyword user pass)
+                (if (kahua-check-user user pass)
+                  (k user)
+                  (loop)))))
+            (p: "ユーザー名 : " (input: (@: (name "user"))))
+            (p: "パスワード : " (input: (@: (type "password") (name "pass"))))
+            (p: (input: (@: (type "submit")))))
+          ))))))
+
+(define (with-kahua-user-role roles thunk)
+  (if (kahua-user-has-role? (kahua-current-user) roles)
+    (thunk)
+    (begin
+      (set! (kahua-current-user) (login))
+      (with-kahua-user-role roles thunk))))
+
+(define-entry (list it)
+  (publish
+    (format "登録済み~aの一覧" (id->name it))
+    (div:
+       (p:
+           (a/cont: (@@: (cont list 'car)) "車一覧") " - "
+           (a/cont: (@@: (cont list 'motor)) "バイク一覧") " - "
+           (a/cont: (@@: (cont new it)) "新規登録") " - "
+           (a/cont: (@@: (cont set-expiry-date)) "有効期限") " - "
+           (a/cont: (@@: (cont set-message)) "メッセージ")
+           `(span:
+             ,@(if (kahua-current-user)
+              `(" - " ,(a/cont: (@@: (cont (entry-lambda () (kahua-logout) (redirect/cont (cont list it))))) "ログアウト"))
+              '())))
+       (h1: (format "登録済み~aの一覧" (id->name it)))
+       (p: "現在、予備登録は" (time->date-string (config 'expiry-date)) "までの分を受け付けています")
+       `(table
+          ,(tr:
+            (th: "部屋") (th: "名前") (th: (@: (colspan "2")) "ナンバー") (th: "予備登録日") (th: "登録日") (th: "現在の有効期限") (th: "申込中の有効期限") (th: "承認取消") (th: "削除"))
+         ,@(map
+           (lambda (x)
+             (tr: (@: (class (cond
+                 ((and (not (registration-ok x)) (not (pre-registration-ok x))) "expired")
+                 ((and (pre-registration-ok x) (not (registration-ok x))) "pre-registration")
+                 (else "valid"))))
+               (td: (~ x 'owner-room)) (td: (~ x 'owner-name)) (td: (~ x 'car-number-prefix))
+               (td: (~ x 'car-number))
+               (td: (if (or (and (not (registration-ok x)) (not (pre-registration-ok x)))
+                            (registration-update-available x))
+                        (a/cont: (@@: (cont (update-registration x))) "登録する")
+                        (time->date-string (~ x 'pre-registration-date))))
+               (td: (if (and (pre-registration-ok x) (not (registration-ok x)))
+                        (a/cont: (@@: (cont (entry-lambda ()
+                          (with-kahua-user-role '(admin)
+                            (lambda ()
+                              (set! (ref x 'expiry-date) (ref x 'expiry-date-to-register))
+                              (set! (ref x 'expiry-date-to-register) #f)
+                              (set! (ref x 'registration-date) (sys-time))
+                              (redirect/cont (cont list it)))))))
+                          "承認する")
+                        (time->date-string (~ x 'registration-date))))
+               (td: (time->date-string (~ x 'expiry-date)))
+               (td: (time->date-string (~ x 'expiry-date-to-register)))
+               (td: (if (registration-ok x)
+                        (a/cont: (@@: (cont (entry-lambda ()
+                            (with-kahua-user-role '(admin)
+                              (lambda ()
+                                (set! (ref x 'registration-date) #f)
+                                (set! (ref x 'expiry-date) #f)
+                                (redirect/cont (cont list it)))))))
+                          "承認取消")
+                        ""))
+               (td: (a/cont: (@@: (cont (entry-lambda ()
+                        (with-kahua-user-role '(admin)
+                          (lambda ()
+                            (remove-kahua-instance x)
+                            (redirect/cont (cont list it)))))))
+                      "削除"))
+               ))
+           (sort-cars (make-kahua-collection (id->class it))))))))
+
+(define (pre-registration-ok x)
+  (and (~ x 'pre-registration-date)
+       (~ x 'expiry-date-to-register)
+       (< (sys-time) (~ x 'expiry-date-to-register))))
+
+(define (registration-update-available x)
+  (or (and (~ x 'expiry-date-to-register)
+           (< (~ x 'expiry-date-to-register) (config 'expiry-date)))
+      (and (~ x 'expiry-date)
+           (< (~ x 'expiry-date) (config 'expiry-date))
+           (not (pre-registration-ok x)))))
+
+(define (registration-ok x)
+  (and (~ x 'registration-date)
+       (< (~ x 'pre-registration-date) (~ x 'registration-date))
+       (< (sys-time) (~ x 'expiry-date))))
+
+(define (sort-cars coll)
+  (let ((lis (map values coll)))
+    (sort lis (lambda (a b) (string<? (~ a 'car-number) (~ b 'car-number))))))
+
+(define-entry (new it)
+  (let ((date (config 'expiry-date)))
+  (kahua:xml-template->sxml
+   page-template
+   :title (title/ (@/ (id "title")) "新規登録")
+   :body
+     (div:
+       (h1: (format "~a駐車登録予備登録" (id->name it)))
+       (p: (time->date-string date) "までの分を受け付けています")
+       (form/cont:
+         (@@: (cont
+          (entry-lambda (:keyword room1 room2 name1 name2 number1 number2 number3 number4 tel email)
+            (let
+              ((room (string-append room1 " " room2))
+               (name (string-append name1 " " name2))
+               (number-prefix (string-append number1 " " number2))
+               (number (string-append number3 " " number4)))
+              (make (id->class it) :owner-room room :owner-name name :car-number-prefix number-prefix :car-number number :pre-registration-date (sys-time) :expiry-date-to-register date :owner-tel tel :owner-email email))
+            (publish "予備登録完了" (div: (p: "予備登録は完了しました。") (p: (config 'message)) (p: (a/cont: (@@: (cont list it)) "一覧に戻る")))))))
+         (table:
+           (tr:
+             (td: "A") (td: "100") (td: "山田") (td: "太郎") (td: "大阪") (td: "100") (td: "あ") (td: "1234") (td: "電話") (td: "メール"))
+           (tr:
+             (td: (select: (@: (name "room1"))
+                 (option: "A" (@: (selected "selected") (value "A")))
+                 (option: "B" (@: (value "B")))
+                 (option: "C" (@: (value "C")))))
+             (td: (input: (@: (size "5") (name "room2"))))
+             (td: (input: (@: (size "16") (name "name1"))))
+             (td: (input: (@: (size "16") (name "name2"))))
+             (td: (input: (@: (size "5") (name "number1"))))
+             (td: (input: (@: (size "5") (name "number2"))))
+             (td: (input: (@: (size "2") (name "number3"))))
+             (td: (input: (@: (size "5") (name "number4"))))
+             (td: (input: (@: (size "20") (name "tel"))))
+             (td: (input: (@: (size "40") (name "email"))))
+             ))
+         (input: (@: (type "submit") (value "送信"))))))))
+
+(define-entry (default)
+  (publish
+    "登録システム"
+    `(div ,@(map
+      (lambda (it)
+        (span: (a/cont: (@@: (cont list it)) (id->name it)) " "))
+      '(car motor)))))
+
+(initialize-main-proc default)

@@ -1,0 +1,64 @@
+;; -*- coding: utf-8; mode: scheme -*-
+;; test chusha script.
+
+(use gauche.test)
+(use file.util)
+(use text.tree)
+(use sxml.ssax)
+(use sxml.sxpath)
+(use kahua)
+(use kahua.test.xml)
+(use kahua.test.worker)
+
+(test-start "chusha")
+
+(define GOSH "##GOSH##")
+(define *PLUGINS* '(##PLUGINS##))
+(define *config* "test.conf")
+
+(sys-system "rm -rf _tmp _work chusha")
+(sys-mkdir "chusha" #o755)
+(sys-mkdir "_tmp" #o755)
+(sys-mkdir "_work" #o755)
+(sys-mkdir "_work/plugins" #o755)
+(sys-mkdir "_work/templates" #o755)
+(sys-mkdir "_work/templates/chusha" #o755)
+
+(for-each (lambda (f)
+	    (copy-file #`"../plugins/,f"  #`"_work/plugins/,f"))
+	  (directory-list "../plugins" :children? #t :filter file-is-regular? :filter-add-path? #t))
+(for-each (lambda (f)
+	    (copy-file #`"../templates/,f" #`"_work/templates/chusha/,f"))
+	  (directory-list "../templates" :children? #t :filter file-is-regular? :filter-add-path? #t))
+
+(kahua-init *config*)
+
+;;------------------------------------------------------------
+;; Run chusha
+(test-section "kahua-server chusha.kahua")
+
+(with-worker
+ (w `(,GOSH "-I.." "-I##KAHUA_LIB##" "kahua-server.scm" "-c" ,*config*
+            "../src/chusha.kahua"))
+
+ (test* "run chusha.kahua" #t (worker-running? w))
+
+
+;  (test* "chusha"
+;         '(html (head (title "Hello, world!"))
+;                (body (h1 "Hello, world!")
+;                      (a (@ (href ?&)) "version")))
+;         (call-worker/gsid w '() '() (lambda (h b) (tree->string b)))
+;         (make-match&pick w))
+
+;  (test* "version"
+;        '(html (head (title "chusha: version ##PROJECT_VERSION##"))
+;               (body (h1 "chusha: version ##PROJECT_VERSION##")
+;                     (a ?@ ?*)))
+;        (call-worker/gsid w '() '() (lambda (h b) (tree->string b)))
+;        (make-match&pick w))
+
+ )
+
+(test-end)
+
